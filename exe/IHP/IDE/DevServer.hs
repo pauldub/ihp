@@ -78,7 +78,6 @@ handleAction :: (?context :: Context) => AppState -> Action -> IO AppState
 handleAction state@(AppState { appGHCIState }) (UpdatePostgresState postgresState) = 
     case postgresState of
         PostgresReady -> onPostgresReady
-        PostgresStarted {} -> onPostgresReady
         otherwise -> pure state { postgresState }
     where
       onPostgresReady = do
@@ -100,21 +99,19 @@ handleAction state@(AppState { appGHCIState, statusServerState, postgresState })
     case appGHCIState of
         AppGHCILoading { .. } -> do
             let appGHCIState' = AppGHCIModulesLoaded { .. }
-            let startApp = do
-                            stopStatusServer statusServerState
-                            startLoadedApp appGHCIState
-
-
-                            let statusServerState' = case statusServerState of
-                                    StatusServerStarted { .. } -> StatusServerPaused { .. }
-                                    _ -> statusServerState
-
-                            pure state { appGHCIState = appGHCIState', statusServerState = statusServerState' }
-
             hasSchemaCompilerError <- isJust <$> readIORef state.lastSchemaCompilerError
             case postgresState of
-                PostgresStarted {} | not hasSchemaCompilerError -> startApp
-                PostgresReady | not hasSchemaCompilerError -> startApp
+                PostgresReady | not hasSchemaCompilerError -> do
+                    stopStatusServer statusServerState
+                    startLoadedApp appGHCIState
+
+
+                    let statusServerState' = case statusServerState of
+                            StatusServerStarted { .. } -> StatusServerPaused { .. }
+                            _ -> statusServerState
+
+                    pure state { appGHCIState = appGHCIState', statusServerState = statusServerState' }
+
                 _ -> do
                     when (get #isDebugMode ?context) (Log.debug ("AppModulesLoaded but db not in PostgresStarted state, therefore not starting app yet" :: Text))
                     pure state { appGHCIState = appGHCIState' }
@@ -192,31 +189,17 @@ handleAction state@(AppState { appGHCIState }) PauseApp =
             pure state { appGHCIState = AppGHCIModulesLoaded { .. } }
         otherwise -> do Log.info ("Could not pause app as it's not in running state" <> tshow otherwise); pure state
 
-isUsingDevenv :: IO Bool
-isUsingDevenv = do
-    Env.lookupEnv "IHP_DEVENV" >>= \case
-        Just "1" -> pure True
-        Nothing -> pure False
-
 start :: (?context :: Context) => IO ()
 start = do
     async startStatusServer
     async startAppGHCI
-    async $ do
-        useDevenv <- isUsingDevenv
-        if useDevenv
-        then waitUntilServerIsRunning
-        else do
-            startPostgres
-            pure ()
+    async waitPostgresServer
     pure ()
 
 stop :: (?context :: Context) => AppState -> IO ()
 stop AppState { .. } = do
-    useDevenv <- isUsingDevenv
     when (get #isDebugMode ?context) (Log.debug ("Stop called" :: Text))
     stopAppGHCI appGHCIState
-    when (not useDevenv) $ stopPostgres postgresState
     stopStatusServer statusServerState
 
 startGHCI :: IO ManagedProcess

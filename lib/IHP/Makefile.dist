@@ -98,42 +98,24 @@ endif
 
 all: build/ihp-lib build/Generated/Types.hs
 
-# Avoid canceling the 'make .envrc' task causing the .envrc file to be deleted
-.PRECIOUS: .envrc build/envrc
-
-.envrc: build/envrc default.nix ## Rebuild nix packages and .envrc
-	rm -f .envrc
-	mv build/envrc .envrc
-	direnv allow
-
-# We build the .envrc file in a seperate task to avoid causing the .envrc accidentally
-# getting deleted when the nix-shell fails to build
-build/envrc: default.nix
-	rm -f build/envrc
-	mkdir -p build
-	echo "PATH_add $$(nix-shell -j auto --cores 0 --pure --run 'printf %q $$PATH')" > build/envrc
-
 build/bin:
 	mkdir -p build/bin
 
 run-production: build/bin/RunProdServer build/Generated/Types.hs ## Run Production Server
 	build/bin/RunProdServer
 
-postgres: ## Starts the postgresql server
-	@if [ -s build/db/state/postmaster.pid ]; then echo "Postgres is already running."; else echo "Starting postgres"; postgres -D build/db/state -k $$PWD/build/db -c "listen_addresses="; fi
-
 psql: ## Connects to the running postgresql server
-	@psql -h $$PWD/build/db -d app
+	@psql -d app
 
 db: Application/Schema.sql Application/Fixtures.sql ## Creates a new database with the current Schema and imports Fixtures.sql
-	echo "drop schema public cascade; create schema public;" | psql -h $$PWD/build/db -d app
-	psql -h $$PWD/build/db -d app < "${IHP_LIB}/IHPSchema.sql"
-	psql -h $$PWD/build/db -d app < Application/Schema.sql
-	psql -h $$PWD/build/db -d app < Application/Fixtures.sql
+	echo "drop schema public cascade; create schema public;" | psql -d app
+	psql -d app < "${IHP_LIB}/IHPSchema.sql"
+	psql -d app < Application/Schema.sql
+	psql -d app < Application/Fixtures.sql
 
 dumpdb: dump_db ## Saves the current database state into the Fixtures.sql
 dump_db: ## Saves the current database state into the Fixtures.sql
-	pg_dump -a --inserts --column-inserts --disable-triggers -h $$PWD/build/db app | sed -e '/^--/d' > Application/Fixtures.sql
+	pg_dump -a --inserts --column-inserts --disable-triggers app | sed -e '/^--/d' > Application/Fixtures.sql
 
 build/Generated/Types.hs: Application/Schema.sql ## Rebuilds generated types
 	mkdir -p build/Generated
@@ -156,8 +138,6 @@ build/bin/RunOptimizedProdServer: Main.hs build/bin static/prod.js static/prod.c
 clean: ## Resets all build and temporary files
 	rm -rf build/bin
 	rm -rf IHP/IHP/static/node_modules
-	rm -rf build/db
-	rm -f .envrc
 
 static/prod.js: $(JS_FILES) ## Builds the production js bundle
 	awk -v RS='\0' '{print "(function (window, document, undefined) {"; print; print "\n})(window, document);";}' $(JS_FILES) > $@
